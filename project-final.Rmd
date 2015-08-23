@@ -1,0 +1,109 @@
+---
+title: "Personal Activity Device Measurement Accuracy Analysis"
+output: html_document
+---
+
+### Executive Summary
+
+Currently, many people use devices such as Jawbone Up, Nike FuelBand, and Fitbit to measure how many activities they have performed, such as walking, running.  However, it's rarely told how well they have performed.  
+
+An experiment has been done to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.  They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  Please refer to http://groupware.les.inf.puc-rio.br/har for more information.  
+
+In this report, we will use the experiment data collected above to predict the manner in which they did the exercise.  
+
+### Data Description
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+### Exploratory Analysis
+
+Let's explore the training data and see what it looks like:
+
+```{r library and seed}
+library(caret)
+library(randomForest)
+library(doParallel)
+registerDoParallel(cores=2)
+
+set.seed(621)
+```
+
+```{r reading-data}
+pml.training <- read.csv("pml-training.csv", as.is=c("user_name", "cvtd_timestamp", "kurtosis_roll_belt", "kurtosis_picth_belt", "kurtosis_yaw_belt", "skewness_roll_belt", "skewness_roll_belt.1", "skewness_yaw_belt", "max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "kurtosis_roll_arm", "kurtosis_picth_arm", "kurtosis_yaw_arm", "skewness_roll_arm", "skewness_pitch_arm", "skewness_yaw_arm", "kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "kurtosis_yaw_dumbbell", "skewness_roll_dumbbell", "skewness_pitch_dumbbell", "skewness_yaw_dumbbell", "max_yaw_dumbbell", "min_yaw_dumbbell"));
+```
+
+Using `str(pml.training)`, we know that there are `19622 obs. of  160 variables` in the dataset.  The variable to predict is `classe` and all others can be predictors.  As I have NO domain and professional knowledge, I can only choose based on data characteristics and try NOT to remove too much data manually.  
+
+1. By using `summary(pml.training)`, we can find that variables like `max_roll_belt`, `var_total_accel_belt`, or `var_total_accel_belt` are having same NA count and should be derived value from raw data.  Hence, I think it's safe to remove all of them.  
+
+2. Some looks obvious unrelated variable like `cvtd_timestamp`, `user_name`, `X`, `raw_timestamp_part_1` and `raw_timestamp_part_2`.  
+
+Hence, 1st stage data cleansing can be as:  
+
+```{r cleansing-manual}
+## Remove unrelated variables
+pml.training$cvtd_timestamp <- NULL
+pml.training$raw_timestamp_part_1 <- NULL
+pml.training$raw_timestamp_part_2 <- NULL
+pml.training$user_name <- NULL
+pml.training$X <- NULL
+
+## Remove variables with many NA value
+pml.training <- pml.training[,colSums(is.na(pml.training)) != 19216]
+
+length(names(pml.training))
+```
+
+But there are still too many variables.  We can further remove some Near Zero Variance variables.  
+
+```{r cleansing-auto}
+nzv <- nearZeroVar(pml.training)
+pml.training <- pml.training[,-nzv]
+
+length(names(pml.training))
+```
+
+Let's cross validate using two different algorithm `randomForest` and clarification tree `rpart` to pick the model.  
+
+```{r model}
+## Create training and testing dataset
+inTrain <- createDataPartition(y = pml.training$classe, p = 0.6, list = F)
+training <- pml.training[inTrain,]
+testing <- pml.training[-inTrain,]
+
+## randomForest
+modelFit.rf <- randomForest(classe ~ ., data = training)
+pd.rf <- predict(modelFit.rf, testing)
+diff.result.rf <- testing$classe != pd.rf
+err.rf <- sum(diff.result.rf) / length(diff.result.rf)
+
+## rpart
+modelFit.rpart <- train(classe ~ ., method = "rpart", trControl = trainControl(method = "cv"), data = training)
+pd.rpart <- predict(modelFit.rpart, testing)
+diff.result.rpart <- testing$classe != pd.rpart
+err.rpart <- sum(diff.result.rpart) / length(diff.result.rpart)
+
+modelFit.rf
+modelFit.rpart
+```
+
+Normally, the Out of Sample Error should be larger than In Sample Error which means the error rate verified against `testing` dataset should be larger than the model error rate.  
+
+
+The error rate for `randomForest` model verified against `testing` dataset is `r err.rf * 100`% which is roughly the same as model OOB estimate of error rate.  
+
+For `rpart`, the accuracy is `r 1 - err.rpart` and it's slightly smaller than chosen model accuracy.
+
+Hence, we will choose the model built by `randomForest` algorithm to predict value for the testing data.
+
+```{r predict}
+pml.testing <- read.csv("pml-testing.csv", as.is=c("user_name", "cvtd_timestamp", "kurtosis_roll_belt", "kurtosis_picth_belt", "kurtosis_yaw_belt", "skewness_roll_belt", "skewness_roll_belt.1", "skewness_yaw_belt", "max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "kurtosis_roll_arm", "kurtosis_picth_arm", "kurtosis_yaw_arm", "skewness_roll_arm", "skewness_pitch_arm", "skewness_yaw_arm", "kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "kurtosis_yaw_dumbbell", "skewness_roll_dumbbell", "skewness_pitch_dumbbell", "skewness_yaw_dumbbell", "max_yaw_dumbbell", "min_yaw_dumbbell"));
+
+pd.final <- predict(modelFit.rf, pml.testing)
+```
